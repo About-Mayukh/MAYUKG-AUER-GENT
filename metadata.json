@@ -1,0 +1,6 @@
+{
+  "name": "Secure Vault & Device Access System",
+  "description": "Role-based secure file sharing vault with automatic device ID authentication, multi-table approval workflows, and granular permission controls.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
