@@ -222,6 +222,7 @@ export async function checkSupabaseStatus() {
         request_logins: false,
         device_change_requests: false,
         uploaded_files: false,
+        notifications: false,
       },
       allTablesReady: false,
       message: err.message || 'Error communicating with Supabase',
@@ -369,10 +370,10 @@ export async function syncFileToSupabase(file: DbFile): Promise<void> {
   }
 }
 
-export async function syncNotificationToSupabase(notif: DbNotification): Promise<void> {
-  if (!supabaseClient) return;
+export async function syncNotificationToSupabase(notif: DbNotification): Promise<{ success: boolean; error?: string }> {
+  if (!supabaseClient) return { success: false, error: 'Supabase client not configured' };
   try {
-    await supabaseClient.from('notifications').upsert({
+    const { error } = await supabaseClient.from('notifications').upsert({
       id: notif.id,
       title: notif.title,
       message: notif.message,
@@ -383,8 +384,15 @@ export async function syncNotificationToSupabase(notif: DbNotification): Promise
       read_by: notif.readBy || [],
       created_at: notif.createdAt || new Date().toISOString(),
     });
-  } catch (err) {
+    if (error) {
+      console.warn('⚠️ Supabase notifications upsert error:', error.message);
+      return { success: false, error: error.message };
+    }
+    console.log('✅ Notification saved to Supabase notifications table successfully:', notif.id);
+    return { success: true };
+  } catch (err: any) {
     console.error('Failed to sync notification to Supabase:', err);
+    return { success: false, error: err.message || 'Error syncing to Supabase' };
   }
 }
 
@@ -399,74 +407,89 @@ export async function deleteNotificationFromSupabase(notifId: string): Promise<{
   }
 }
 
-export async function syncAllToSupabase(dbData: VaultDatabase): Promise<{ success: boolean; counts: any; error?: string }> {
+export function getNotificationsSql(): string {
+  return `-- ==========================================================
+-- CREATE NOTIFICATIONS TABLE IN SUPABASE
+-- Project: mzkklxgptpifgmzstegs
+-- ==========================================================
+
+CREATE TABLE IF NOT EXISTS public.notifications (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    message TEXT NOT NULL,
+    target_user_id TEXT NOT NULL DEFAULT 'ALL',
+    target_email TEXT NOT NULL DEFAULT 'ALL',
+    sender_email TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'info' CHECK (type IN ('info', 'warning', 'alert', 'success')),
+    read_by JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Enable Row Level Security (RLS)
+ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
+
+-- Allow all users to read notifications
+DROP POLICY IF EXISTS "Anyone can read notifications" ON public.notifications;
+CREATE POLICY "Anyone can read notifications"
+ON public.notifications FOR SELECT
+USING (true);
+
+-- Allow admins and backend service role to insert, update, and delete notifications
+DROP POLICY IF EXISTS "Admin and service manage all notifications" ON public.notifications;
+CREATE POLICY "Admin and service manage all notifications"
+ON public.notifications FOR ALL
+USING (true)
+WITH CHECK (true);
+
+-- Insert Initial Welcome Notification
+INSERT INTO public.notifications (
+    id, title, message, target_user_id, target_email, sender_email, type, created_at
+) VALUES (
+    'notif_sys_init',
+    'Zero-Trust Secure Vault Active',
+    'Welcome to the Secure Hardware-Isolated Cloud Vault. All files and transmissions are cryptographically protected.',
+    'ALL',
+    'ALL',
+    'mayukhdey9920.apple@gmail.com',
+    'info',
+    now()
+) ON CONFLICT (id) DO NOTHING;
+`;
+}
+
+export async function syncNotificationsToSupabase(notificationsList?: DbNotification[]): Promise<{
+  success: boolean;
+  count: number;
+  error?: string;
+  tableExists: boolean;
+}> {
   if (!supabaseClient) {
-    return { success: false, counts: {}, error: 'Supabase client not configured' };
+    return { success: false, count: 0, error: 'Supabase client not configured', tableExists: false };
   }
+
+  // Check if notifications table exists
   try {
-    const users = (dbData.existing_users || []).map(u => ({
-      id: u.id,
-      email: u.email,
-      name: u.name,
-      phone: u.phone,
-      device_id: u.deviceId,
-      role: u.role,
-      status: u.status,
-      can_upload_public: u.permissions?.canUploadPublic ?? true,
-      can_upload_private: u.permissions?.canUploadPrivate ?? true,
-      can_delete_own: u.permissions?.canDeleteOwn ?? true,
-      can_download: u.permissions?.canDownload ?? true,
-      created_at: u.createdAt || new Date().toISOString(),
-      last_login_at: u.lastLoginAt || new Date().toISOString(),
-    }));
-    await supabaseClient.from('existing_users').upsert(users);
+    const checkRes = await supabaseClient.from('notifications').select('id').limit(1);
+    if (checkRes.error) {
+      return {
+        success: false,
+        count: 0,
+        tableExists: false,
+        error: checkRes.error.message,
+      };
+    }
+  } catch (err: any) {
+    return {
+      success: false,
+      count: 0,
+      tableExists: false,
+      error: err.message,
+    };
+  }
 
-    const files = (dbData.uploaded_files || []).map(f => ({
-      id: f.id,
-      uploader_id: f.uploaderId,
-      uploader_name: f.uploaderName,
-      uploader_email: f.uploaderEmail,
-      file_name: f.fileName,
-      file_size: f.fileSize,
-      mime_type: f.mimeType,
-      is_private: f.isPrivate ?? false,
-      file_data_base64: f.dataUrl,
-      download_count: f.downloadCount ?? 0,
-      downloaded_by: f.downloadedBy ?? [],
-      created_at: f.createdAt || new Date().toISOString(),
-    }));
-    await supabaseClient.from('uploaded_files').upsert(files);
-
-    const logins = (dbData.request_logins || []).map(r => ({
-      id: r.id,
-      email: r.email,
-      name: r.name,
-      phone: r.phone,
-      device_id: r.deviceId,
-      status: r.status,
-      created_at: r.createdAt || new Date().toISOString(),
-      reviewed_at: r.reviewedAt || null,
-      reviewed_by: r.reviewedBy || null,
-      reject_reason: r.rejectReason || null,
-    }));
-    await supabaseClient.from('request_logins').upsert(logins);
-
-    const dcrs = (dbData.device_change_requests || []).map(d => ({
-      id: d.id,
-      user_id: d.userId,
-      email: d.email,
-      name: d.name,
-      phone: d.phone,
-      old_device_id: d.oldDeviceId,
-      new_device_id: d.newDeviceId,
-      status: d.status,
-      created_at: d.createdAt || new Date().toISOString(),
-      reviewed_at: d.reviewedAt || null,
-      reviewed_by: d.reviewedBy || null,
-    }));
-    await supabaseClient.from('device_change_requests').upsert(dcrs);
-
-    const notifs = (dbData.notifications || []).map(n => ({
+  try {
+    const list = notificationsList || vaultDb.getAllNotifications();
+    const records = list.map(n => ({
       id: n.id,
       title: n.title,
       message: n.message,
@@ -477,19 +500,154 @@ export async function syncAllToSupabase(dbData: VaultDatabase): Promise<{ succes
       read_by: n.readBy || [],
       created_at: n.createdAt || new Date().toISOString(),
     }));
-    if (notifs.length > 0) {
-      await supabaseClient.from('notifications').upsert(notifs);
+
+    if (records.length === 0) {
+      return { success: true, count: 0, tableExists: true };
     }
 
+    const { error } = await supabaseClient.from('notifications').upsert(records);
+    if (error) {
+      return { success: false, count: 0, tableExists: true, error: error.message };
+    }
+
+    return { success: true, count: records.length, tableExists: true };
+  } catch (err: any) {
+    return { success: false, count: 0, tableExists: true, error: err.message };
+  }
+}
+
+export async function syncAllToSupabase(dbData: VaultDatabase): Promise<{ success: boolean; counts: any; tableErrors?: Record<string, string>; error?: string }> {
+  if (!supabaseClient) {
+    return { success: false, counts: {}, error: 'Supabase client not configured' };
+  }
+  const counts: Record<string, number> = {};
+  const tableErrors: Record<string, string> = {};
+
+  try {
+    // 1. existing_users
+    try {
+      const users = (dbData.existing_users || []).map(u => ({
+        id: u.id,
+        email: u.email,
+        name: u.name,
+        phone: u.phone,
+        device_id: u.deviceId,
+        role: u.role,
+        status: u.status,
+        can_upload_public: u.permissions?.canUploadPublic ?? true,
+        can_upload_private: u.permissions?.canUploadPrivate ?? true,
+        can_delete_own: u.permissions?.canDeleteOwn ?? true,
+        can_download: u.permissions?.canDownload ?? true,
+        created_at: u.createdAt || new Date().toISOString(),
+        last_login_at: u.lastLoginAt || new Date().toISOString(),
+      }));
+      const { error: userErr } = await supabaseClient.from('existing_users').upsert(users);
+      if (userErr) tableErrors.existing_users = userErr.message;
+      else counts.users = users.length;
+    } catch (e: any) {
+      tableErrors.existing_users = e.message;
+    }
+
+    // 2. uploaded_files
+    try {
+      const files = (dbData.uploaded_files || []).map(f => ({
+        id: f.id,
+        uploader_id: f.uploaderId,
+        uploader_name: f.uploaderName,
+        uploader_email: f.uploaderEmail,
+        file_name: f.fileName,
+        file_size: f.fileSize,
+        mime_type: f.mimeType,
+        is_private: f.isPrivate ?? false,
+        file_data_base64: f.dataUrl,
+        download_count: f.downloadCount ?? 0,
+        downloaded_by: f.downloadedBy ?? [],
+        created_at: f.createdAt || new Date().toISOString(),
+      }));
+      const { error: fileErr } = await supabaseClient.from('uploaded_files').upsert(files);
+      if (fileErr) tableErrors.uploaded_files = fileErr.message;
+      else counts.files = files.length;
+    } catch (e: any) {
+      tableErrors.uploaded_files = e.message;
+    }
+
+    // 3. request_logins
+    try {
+      const logins = (dbData.request_logins || []).map(r => ({
+        id: r.id,
+        email: r.email,
+        name: r.name,
+        phone: r.phone,
+        device_id: r.deviceId,
+        status: r.status,
+        created_at: r.createdAt || new Date().toISOString(),
+        reviewed_at: r.reviewedAt || null,
+        reviewed_by: r.reviewedBy || null,
+        reject_reason: r.rejectReason || null,
+      }));
+      const { error: logErr } = await supabaseClient.from('request_logins').upsert(logins);
+      if (logErr) tableErrors.request_logins = logErr.message;
+      else counts.registrationRequests = logins.length;
+    } catch (e: any) {
+      tableErrors.request_logins = e.message;
+    }
+
+    // 4. device_change_requests
+    try {
+      const dcrs = (dbData.device_change_requests || []).map(d => ({
+        id: d.id,
+        user_id: d.userId,
+        email: d.email,
+        name: d.name,
+        phone: d.phone,
+        old_device_id: d.oldDeviceId,
+        new_device_id: d.newDeviceId,
+        status: d.status,
+        created_at: d.createdAt || new Date().toISOString(),
+        reviewed_at: d.reviewedAt || null,
+        reviewed_by: d.reviewedBy || null,
+      }));
+      const { error: dcrErr } = await supabaseClient.from('device_change_requests').upsert(dcrs);
+      if (dcrErr) tableErrors.device_change_requests = dcrErr.message;
+      else counts.deviceChangeRequests = dcrs.length;
+    } catch (e: any) {
+      tableErrors.device_change_requests = e.message;
+    }
+
+    // 5. notifications
+    try {
+      const notifs = (dbData.notifications || []).map(n => ({
+        id: n.id,
+        title: n.title,
+        message: n.message,
+        target_user_id: n.targetUserId || 'ALL',
+        target_email: n.targetEmail || 'ALL',
+        sender_email: n.senderEmail,
+        type: n.type || 'info',
+        read_by: n.readBy || [],
+        created_at: n.createdAt || new Date().toISOString(),
+      }));
+      if (notifs.length > 0) {
+        const { error: notifErr } = await supabaseClient.from('notifications').upsert(notifs);
+        if (notifErr) tableErrors.notifications = notifErr.message;
+        else counts.notifications = notifs.length;
+      } else {
+        counts.notifications = 0;
+      }
+    } catch (e: any) {
+      tableErrors.notifications = e.message;
+    }
+
+    const hasAnySuccess = Object.keys(counts).length > 0;
+    const hasAnyError = Object.keys(tableErrors).length > 0;
+
     return {
-      success: true,
-      counts: {
-        users: users.length,
-        files: files.length,
-        registrationRequests: logins.length,
-        deviceChangeRequests: dcrs.length,
-        notifications: notifs.length,
-      },
+      success: hasAnySuccess,
+      counts,
+      tableErrors: hasAnyError ? tableErrors : undefined,
+      error: hasAnyError
+        ? `Partial sync: some tables had issues (${Object.keys(tableErrors).join(', ')})`
+        : undefined,
     };
   } catch (err: any) {
     console.error('Error during full sync to Supabase:', err);

@@ -28,6 +28,7 @@ import { User, VaultFile, AppNotification } from '../types.ts';
 import { maskDeviceId } from '../utils/deviceMask';
 import { UploadModal } from './UploadModal.tsx';
 import { UserNotificationsModal } from './UserNotificationsModal.tsx';
+import { apiFetch, connectRealtimeStream } from '../utils/api.ts';
 
 interface VaultDashboardProps {
   currentUser: User;
@@ -53,12 +54,17 @@ export const VaultDashboard: React.FC<VaultDashboardProps> = ({
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [pendingDeleteFile, setPendingDeleteFile] = useState<VaultFile | null>(null);
 
+  // Real-time Notifications State
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [showNotificationsModal, setShowNotificationsModal] = useState(false);
+  const [loadingNotifications, setLoadingNotifications] = useState(false);
+
   // Fetch files from backend (Strict Privacy isolation enforced on server)
   const loadFiles = async () => {
     setLoading(true);
     setActionError(null);
     try {
-      const res = await fetch('/api/files', {
+      const res = await apiFetch('/api/files', {
         headers: {
           Authorization: `Bearer ${token}`,
           'x-device-id': currentUser.deviceId,
@@ -77,8 +83,83 @@ export const VaultDashboard: React.FC<VaultDashboardProps> = ({
     }
   };
 
+  // Fetch notifications for current user
+  const loadNotifications = async () => {
+    setLoadingNotifications(true);
+    try {
+      const res = await apiFetch('/api/notifications', {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'x-device-id': currentUser.deviceId,
+        },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setNotifications(data.notifications || []);
+      }
+    } catch {
+      // Non-blocking
+    } finally {
+      setLoadingNotifications(false);
+    }
+  };
+
+  const handleMarkAsRead = async (notifId: string) => {
+    try {
+      const res = await apiFetch(`/api/notifications/${notifId}/read`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'x-device-id': currentUser.deviceId,
+        },
+      });
+      if (res.ok) {
+        setNotifications(prev =>
+          prev.map(n => (n.id === notifId ? { ...n, isRead: true } : n))
+        );
+      }
+    } catch {
+      // Ignore
+    }
+  };
+
+  const handleMarkAllAsRead = async () => {
+    try {
+      const res = await apiFetch('/api/notifications/read-all', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'x-device-id': currentUser.deviceId,
+        },
+      });
+      if (res.ok) {
+        setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+      }
+    } catch {
+      // Ignore
+    }
+  };
+
   useEffect(() => {
     loadFiles();
+    loadNotifications();
+
+    // Connect to Real-time Stream (supports cloud SSE and GitHub Pages local event bus)
+    const unsubscribe = connectRealtimeStream((parsed) => {
+      if (parsed.type === 'NOTIFICATION') {
+        loadNotifications();
+      } else if (
+        parsed.type === 'FILES_UPDATED' ||
+        parsed.type === 'DATA_SYNC' ||
+        parsed.type === 'USERS_UPDATED'
+      ) {
+        loadFiles();
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
   }, [currentUser.id]);
 
   // Download handler
@@ -87,7 +168,7 @@ export const VaultDashboard: React.FC<VaultDashboardProps> = ({
     setActionError(null);
 
     try {
-      const res = await fetch(`/api/files/${file.id}/download`, {
+      const res = await apiFetch(`/api/files/${file.id}/download`, {
         headers: {
           Authorization: `Bearer ${token}`,
           'x-device-id': currentUser.deviceId,
@@ -150,7 +231,7 @@ export const VaultDashboard: React.FC<VaultDashboardProps> = ({
     setActionError(null);
 
     try {
-      const res = await fetch(`/api/files/${pendingDeleteFile.id}`, {
+      const res = await apiFetch(`/api/files/${pendingDeleteFile.id}`, {
         method: 'DELETE',
         headers: {
           Authorization: `Bearer ${token}`,
@@ -272,6 +353,27 @@ export const VaultDashboard: React.FC<VaultDashboardProps> = ({
                 <span>Admin Console</span>
               </button>
             )}
+
+            {/* User Real-Time Notifications Button */}
+            <button
+              id="user-notifications-btn"
+              onClick={() => setShowNotificationsModal(true)}
+              className="relative p-2 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-300 hover:text-amber-400 hover:border-amber-500/40 transition cursor-pointer flex items-center justify-center group"
+              title="Notifications from Administrator"
+              aria-label="View notifications"
+            >
+              <Bell className="w-4 h-4 transition group-hover:scale-105" />
+              {notifications.filter(n => !n.isRead).length > 0 && (
+                <span
+                  id="notifications-badge"
+                  className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 bg-amber-500 text-zinc-950 text-[10px] font-bold rounded-full flex items-center justify-center shadow-md animate-pulse"
+                >
+                  {notifications.filter(n => !n.isRead).length > 99
+                    ? '99+'
+                    : notifications.filter(n => !n.isRead).length}
+                </span>
+              )}
+            </button>
 
             <div className="hidden md:flex flex-col text-right">
               <span className="text-xs font-semibold text-zinc-200">{currentUser.name}</span>
@@ -629,6 +731,15 @@ export const VaultDashboard: React.FC<VaultDashboardProps> = ({
           </div>
         </div>
       )}
+      {/* User Real-Time Notifications Modal */}
+      <UserNotificationsModal
+        isOpen={showNotificationsModal}
+        onClose={() => setShowNotificationsModal(false)}
+        notifications={notifications}
+        onMarkAsRead={handleMarkAsRead}
+        onMarkAllAsRead={handleMarkAllAsRead}
+        isLoading={loadingNotifications}
+      />
     </div>
   );
 };

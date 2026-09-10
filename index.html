@@ -9,6 +9,19 @@
     <meta property="og:description" content="Role-based secure file sharing vault with automatic device ID authentication, multi-table approval workflows, and granular permission controls." />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
+    <script type="text/javascript">
+      // GitHub Pages SPA deep link restoration
+      (function(l) {
+        if (l.search[1] === '/' ) {
+          var decoded = l.search.slice(1).split('&').map(function(s) { 
+            return s.replace(/~and~/g, '&')
+          }).join('?');
+          window.history.replaceState(null, null,
+              l.pathname.slice(0, -1) + decoded + l.hash
+          );
+        }
+      }(window.location))
+    </script>
   </head>
   <body>
     <div id="root"></div>

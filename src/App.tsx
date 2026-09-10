@@ -3,6 +3,8 @@ import { User } from './types.ts';
 import { DeviceGate } from './components/DeviceGate.tsx';
 import { VaultDashboard } from './components/VaultDashboard.tsx';
 import { AdminDashboard } from './components/AdminDashboard.tsx';
+import { GitHubPagesBanner } from './components/GitHubPagesBanner.tsx';
+import { apiFetch } from './utils/api.ts';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -59,7 +61,7 @@ export default function App() {
 
   const handleLogout = () => {
     if (authToken) {
-      fetch('/api/auth/logout', {
+      apiFetch('/api/auth/logout', {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${authToken}`,
@@ -77,38 +79,37 @@ export default function App() {
     setIsAdminView(false);
   };
 
-  // If in Admin Console view
-  if (isAdminView && adminUser) {
-    return (
-      <AdminDashboard
-        adminUser={adminUser}
-        token={adminToken || authToken}
-        onExitAdmin={handleExitAdmin}
-      />
-    );
-  }
-
-  // If user is authenticated
-  if (currentUser) {
-    return (
-      <VaultDashboard
-        currentUser={currentUser}
-        token={authToken}
-        onLogout={handleLogout}
-        onOpenAdminConsole={
-          currentUser.role === 'admin'
-            ? () => setIsAdminView(true)
-            : undefined
-        }
-      />
-    );
-  }
-
-  // Default: Device Gate (Scan, Request Page, Stealth DP Icon)
   return (
-    <DeviceGate
-      onAuthenticated={handleAuthenticated}
-      onOpenAdminDirectly={handleAdminDirectLogin}
-    />
+    <>
+      {/* If in Admin Console view */}
+      {isAdminView && adminUser ? (
+        <AdminDashboard
+          adminUser={adminUser}
+          token={adminToken || authToken}
+          onExitAdmin={handleExitAdmin}
+        />
+      ) : currentUser ? (
+        /* If user is authenticated */
+        <VaultDashboard
+          currentUser={currentUser}
+          token={authToken}
+          onLogout={handleLogout}
+          onOpenAdminConsole={
+            currentUser.role === 'admin'
+              ? () => setIsAdminView(true)
+              : undefined
+          }
+        />
+      ) : (
+        /* Default: Device Gate */
+        <DeviceGate
+          onAuthenticated={handleAuthenticated}
+          onOpenAdminDirectly={handleAdminDirectLogin}
+        />
+      )}
+
+      {/* GitHub Pages Mode Indicator & Connection Modal */}
+      <GitHubPagesBanner />
+    </>
   );
 }

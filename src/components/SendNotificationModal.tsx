@@ -15,6 +15,7 @@ import {
   History,
 } from 'lucide-react';
 import { User, AppNotification } from '../types.ts';
+import { apiFetch } from '../utils/api.ts';
 
 interface SendNotificationModalProps {
   isOpen: boolean;
@@ -59,7 +60,7 @@ export const SendNotificationModal: React.FC<SendNotificationModalProps> = ({
   const loadHistory = async () => {
     setLoadingHistory(true);
     try {
-      const res = await fetch('/api/admin/notifications', {
+      const res = await apiFetch('/api/admin/notifications', {
         headers: {
           Authorization: `Bearer ${token}`,
           'x-device-id': adminDeviceId,
@@ -86,7 +87,7 @@ export const SendNotificationModal: React.FC<SendNotificationModalProps> = ({
   const handleDeleteHistoryItem = async (notifId: string) => {
     setDeletingId(notifId);
     try {
-      const res = await fetch(`/api/admin/notifications/${notifId}`, {
+      const res = await apiFetch(`/api/admin/notifications/${notifId}`, {
         method: 'DELETE',
         headers: {
           Authorization: `Bearer ${token}`,
@@ -129,7 +130,7 @@ export const SendNotificationModal: React.FC<SendNotificationModalProps> = ({
     }
 
     try {
-      const res = await fetch('/api/admin/notifications', {
+      const res = await apiFetch('/api/admin/notifications', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -25,6 +25,7 @@ import { maskDeviceId } from '../utils/deviceMask.ts';
 import { COUNTRY_CODES } from './CountryCodes.ts';
 import { AdminLoginModal } from './AdminLoginModal.tsx';
 import { User } from '../types.ts';
+import { apiFetch } from '../utils/api.ts';
 
 interface DeviceGateProps {
   onAuthenticated: (user: User, token: string) => void;
@@ -113,7 +114,7 @@ export const DeviceGate: React.FC<DeviceGateProps> = ({
     setErrorMsg(null);
 
     try {
-      const res = await fetch('/api/auth/check-device', {
+      const res = await apiFetch('/api/auth/check-device', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ deviceId: targetDeviceId }),
@@ -162,7 +163,7 @@ export const DeviceGate: React.FC<DeviceGateProps> = ({
     const fullPhone = `${countryCode} ${phoneNumber.trim()}`;
 
     try {
-      const res = await fetch('/api/auth/register-request', {
+      const res = await apiFetch('/api/auth/register-request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -212,7 +213,7 @@ export const DeviceGate: React.FC<DeviceGateProps> = ({
     const fullPhone = `${countryCode} ${phoneNumber.trim()}`;
 
     try {
-      const res = await fetch('/api/auth/device-change-request', {
+      const res = await apiFetch('/api/auth/device-change-request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

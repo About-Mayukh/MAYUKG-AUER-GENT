@@ -9,6 +9,7 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { User, VaultFile } from '../types.ts';
+import { apiFetch } from '../utils/api.ts';
 
 interface UploadModalProps {
   isOpen: boolean;
@@ -106,7 +107,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
     try {
       const dataUrl = await readFileAsDataUrl(selectedFile);
 
-      const res = await fetch('/api/files/upload', {
+      const res = await apiFetch('/api/files/upload', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

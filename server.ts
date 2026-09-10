@@ -7,8 +7,11 @@ import {
   MASTER_ADMIN_EMAIL,
   MASTER_ADMIN_KEY,
   generateSupabaseRlsScript,
+  getNotificationsSql,
   checkSupabaseStatus,
   syncAllToSupabase,
+  syncNotificationsToSupabase,
+  syncNotificationToSupabase,
   DbUser,
 } from './server/db.ts';
 
@@ -804,6 +807,49 @@ async function startServer() {
     const result = await syncAllToSupabase(data);
     vaultDb.logAction('SUPABASE_SYNC', 'ADMIN', `Full database sync triggered to Supabase. Result: ${result.success ? 'SUCCESS' : 'FAIL'}`);
     res.json(result);
+  });
+
+  // 11. Supabase Notifications Table SQL script
+  app.get('/api/admin/supabase-notifications-sql', requireAdmin, (req: Request, res: Response) => {
+    const sql = getNotificationsSql();
+    res.setHeader('Content-Type', 'text/plain');
+    res.send(sql);
+  });
+
+  // 12. Manual trigger to synchronize notifications to Supabase notifications table
+  app.post('/api/admin/supabase-sync-notifications', requireAdmin, async (req: Request, res: Response) => {
+    const result = await syncNotificationsToSupabase();
+    vaultDb.logAction('SUPABASE_NOTIFICATIONS_SYNC', 'ADMIN', `Notifications sync to Supabase. Result: ${result.success ? 'SUCCESS' : 'FAIL'}, count: ${result.count}`);
+    res.json(result);
+  });
+
+  // 13. Test save notification to Supabase notifications table
+  app.post('/api/admin/supabase-test-notification', requireAdmin, async (req: Request, res: Response) => {
+    const { title, message, type } = req.body || {};
+    const notif = await vaultDb.addNotification({
+      title: title || 'Test Notification',
+      message: message || 'Verification of Supabase public.notifications table integration.',
+      targetUserId: 'ALL',
+      targetEmail: 'ALL',
+      senderEmail: (req as any).adminUser?.email || MASTER_ADMIN_EMAIL || 'admin@securevault.internal',
+      type: type || 'info',
+    });
+
+    // Save directly to Supabase and verify response
+    const supabaseResult = await syncNotificationToSupabase(notif);
+
+    // Broadcast in real-time
+    broadcastRealtime({
+      type: 'NOTIFICATION',
+      timestamp: new Date().toISOString(),
+      data: notif,
+    });
+
+    res.json({
+      success: supabaseResult.success,
+      notification: notif,
+      supabaseResult,
+    });
   });
 
   // ==========================================

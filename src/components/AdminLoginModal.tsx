@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Shield, Lock, Mail, KeyRound, X, AlertCircle, Eye, EyeOff } from 'lucide-react';
 import { User } from '../types.ts';
+import { apiFetch } from '../utils/api.ts';
 
 interface AdminLoginModalProps {
   isOpen: boolean;
@@ -32,10 +33,10 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
     setError(null);
 
     try {
-      const res = await fetch('/api/admin/login', {
+      const res = await apiFetch('/api/admin/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email.trim(), securityKey: securityKey.trim() }),
+        body: JSON.stringify({ email: email.trim(), securityKey: securityKey.trim(), masterKey: securityKey.trim() }),
       });
 
       const data = await res.json();
@@ -43,7 +44,7 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
         throw new Error(data.error || 'Admin verification failed');
       }
 
-      onAdminLoginSuccess(data.user, data.token);
+      onAdminLoginSuccess(data.user || data.adminUser, data.token);
       onClose();
     } catch (err: any) {
       setError(err.message || 'Authentication error');

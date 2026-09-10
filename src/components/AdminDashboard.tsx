@@ -21,8 +21,14 @@ import {
   Download,
   AlertTriangle,
   FileText,
+  Bell,
+  Send,
+  ExternalLink,
+  Code,
 } from 'lucide-react';
 import { User, RegistrationRequest, DeviceChangeRequest, VaultFile, AuditLog, AdminStats } from '../types.ts';
+import { SendNotificationModal } from './SendNotificationModal.tsx';
+import { apiFetch, connectRealtimeStream } from '../utils/api.ts';
 
 interface AdminDashboardProps {
   adminUser: User;
@@ -50,6 +56,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [syncFeedback, setSyncFeedback] = useState<{ message: string; success: boolean } | null>(null);
 
   const [copiedSql, setCopiedSql] = useState(false);
+  const [copiedNotificationsSql, setCopiedNotificationsSql] = useState(false);
+  const [syncingNotifications, setSyncingNotifications] = useState(false);
+  const [notificationsSyncFeedback, setNotificationsSyncFeedback] = useState<{ message: string; success: boolean } | null>(null);
+  const [testingNotification, setTestingNotification] = useState(false);
+  const [testNotificationFeedback, setTestNotificationFeedback] = useState<{ message: string; success: boolean } | null>(null);
+  const [showNotificationsSql, setShowNotificationsSql] = useState(false);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [processingId, setProcessingId] = useState<string | null>(null);
@@ -64,12 +76,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   } | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // Admin Notification Modal State
+  const [showSendNotificationModal, setShowSendNotificationModal] = useState(false);
+  const [notificationTargetUser, setNotificationTargetUser] = useState<User | null>(null);
+
   // Fetch admin console data
   const loadAdminData = async () => {
     setLoading(true);
     setActionError(null);
     try {
-      const res = await fetch('/api/admin/dashboard-data', {
+      const res = await apiFetch('/api/admin/dashboard-data', {
         headers: {
           Authorization: `Bearer ${token}`,
           'x-device-id': adminUser.deviceId,
@@ -109,7 +125,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const loadSupabaseStatus = async () => {
     setCheckingSupabase(true);
     try {
-      const res = await fetch('/api/admin/supabase-status', {
+      const res = await apiFetch('/api/admin/supabase-status', {
         headers: {
           Authorization: `Bearer ${token}`,
           'x-device-id': adminUser.deviceId,
@@ -127,7 +143,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Fetch Supabase SQL script
   const loadSupabaseSql = async () => {
     try {
-      const res = await fetch('/api/admin/supabase-sql', {
+      const res = await apiFetch('/api/admin/supabase-sql', {
         headers: {
           Authorization: `Bearer ${token}`,
           'x-device-id': adminUser.deviceId,
@@ -144,7 +160,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setSyncingSupabase(true);
     setSyncFeedback(null);
     try {
-      const res = await fetch('/api/admin/sync-supabase', {
+      const res = await apiFetch('/api/admin/sync-supabase', {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
@@ -175,10 +191,157 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
+  const notificationsSqlScript = `-- ==========================================================
+-- CREATE NOTIFICATIONS TABLE IN SUPABASE
+-- Project: mzkklxgptpifgmzstegs
+-- ==========================================================
+
+CREATE TABLE IF NOT EXISTS public.notifications (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    message TEXT NOT NULL,
+    target_user_id TEXT NOT NULL DEFAULT 'ALL',
+    target_email TEXT NOT NULL DEFAULT 'ALL',
+    sender_email TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'info' CHECK (type IN ('info', 'warning', 'alert', 'success')),
+    read_by JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Enable Row Level Security (RLS)
+ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
+
+-- Allow reading notifications
+DROP POLICY IF EXISTS "Anyone can read notifications" ON public.notifications;
+CREATE POLICY "Anyone can read notifications"
+ON public.notifications FOR SELECT
+USING (true);
+
+-- Allow admins and backend service role to insert, update, and delete notifications
+DROP POLICY IF EXISTS "Admin and service manage all notifications" ON public.notifications;
+CREATE POLICY "Admin and service manage all notifications"
+ON public.notifications FOR ALL
+USING (true)
+WITH CHECK (true);
+
+-- Insert initial system notification
+INSERT INTO public.notifications (
+    id, title, message, target_user_id, target_email, sender_email, type, created_at
+) VALUES (
+    'notif_sys_init',
+    'Zero-Trust Secure Vault Active',
+    'Welcome to the Secure Hardware-Isolated Cloud Vault. All files and transmissions are cryptographically protected.',
+    'ALL',
+    'ALL',
+    'mayukhdey9920.apple@gmail.com',
+    'info',
+    now()
+) ON CONFLICT (id) DO NOTHING;`;
+
+  const handleCopyNotificationsSql = () => {
+    navigator.clipboard.writeText(notificationsSqlScript);
+    setCopiedNotificationsSql(true);
+    triggerNotice('Copied Notifications SQL to clipboard');
+    setTimeout(() => setCopiedNotificationsSql(false), 2500);
+  };
+
+  const handleSyncNotificationsToSupabase = async () => {
+    setSyncingNotifications(true);
+    setNotificationsSyncFeedback(null);
+    try {
+      const res = await apiFetch('/api/admin/supabase-sync-notifications', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'x-device-id': adminUser.deviceId,
+        },
+      });
+      const data = await res.json();
+      if (data.success) {
+        setNotificationsSyncFeedback({
+          success: true,
+          message: `Successfully synchronized ${data.count} notifications into Supabase public.notifications table!`,
+        });
+        loadSupabaseStatus();
+        triggerNotice('Notifications synced to Supabase table');
+      } else {
+        setNotificationsSyncFeedback({
+          success: false,
+          message: data.error || 'Notifications table not yet created on Supabase. Run the SQL in Supabase SQL editor.',
+        });
+      }
+    } catch (err: any) {
+      setNotificationsSyncFeedback({
+        success: false,
+        message: `Sync failed: ${err.message}`,
+      });
+    } finally {
+      setSyncingNotifications(false);
+    }
+  };
+
+  const handleTestSaveNotification = async () => {
+    setTestingNotification(true);
+    setTestNotificationFeedback(null);
+    try {
+      const res = await apiFetch('/api/admin/supabase-test-notification', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          'x-device-id': adminUser.deviceId,
+        },
+        body: JSON.stringify({
+          title: 'Supabase Sync Test Notification',
+          message: `Notification tested and saved to Supabase public.notifications table at ${new Date().toLocaleTimeString()}.`,
+          type: 'success',
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTestNotificationFeedback({
+          success: true,
+          message: 'Saved directly to Supabase public.notifications table and broadcasted live to all users!',
+        });
+        loadSupabaseStatus();
+        triggerNotice('Test notification saved to Supabase');
+      } else {
+        setTestNotificationFeedback({
+          success: false,
+          message: data.supabaseResult?.error || 'Failed to save to Supabase table. Ensure table exists in Supabase.',
+        });
+      }
+    } catch (err: any) {
+      setTestNotificationFeedback({
+        success: false,
+        message: err.message || 'Error testing Supabase notification',
+      });
+    } finally {
+      setTestingNotification(false);
+    }
+  };
+
   useEffect(() => {
     loadAdminData();
     loadSupabaseSql();
     loadSupabaseStatus();
+
+    // Connect to Real-time Stream for instant updates across admin & user actions
+    const unsubscribe = connectRealtimeStream((parsed) => {
+      if (
+        parsed.type === 'FILES_UPDATED' ||
+        parsed.type === 'REQUESTS_UPDATED' ||
+        parsed.type === 'USERS_UPDATED' ||
+        parsed.type === 'NOTIFICATION' ||
+        parsed.type === 'DATA_SYNC'
+      ) {
+        loadAdminData();
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
   }, []);
 
   const triggerNotice = (msg: string) => {
@@ -191,7 +354,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setProcessingId(requestId);
     setActionError(null);
     try {
-      const res = await fetch('/api/admin/requests/approve-registration', {
+      const res = await apiFetch('/api/admin/requests/approve-registration', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -219,7 +382,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setProcessingId(requestId);
     setActionError(null);
     try {
-      const res = await fetch('/api/admin/requests/reject-registration', {
+      const res = await apiFetch('/api/admin/requests/reject-registration', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -246,7 +409,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setProcessingId(requestId);
     setActionError(null);
     try {
-      const res = await fetch('/api/admin/requests/approve-device-change', {
+      const res = await apiFetch('/api/admin/requests/approve-device-change', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -273,7 +436,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setProcessingId(requestId);
     setActionError(null);
     try {
-      const res = await fetch('/api/admin/requests/reject-device-change', {
+      const res = await apiFetch('/api/admin/requests/reject-device-change', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -307,7 +470,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
 
     try {
-      const res = await fetch(`/api/admin/users/${targetUser.id}/permissions`, {
+      const res = await apiFetch(`/api/admin/users/${targetUser.id}/permissions`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -335,7 +498,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleToggleStatus = async (targetUser: User) => {
     const nextStatus = targetUser.status === 'active' ? 'suspended' : 'active';
     try {
-      const res = await fetch(`/api/admin/users/${targetUser.id}/permissions`, {
+      const res = await apiFetch(`/api/admin/users/${targetUser.id}/permissions`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -377,7 +540,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         url = `/api/admin/requests/device-change/${pendingDelete.id}`;
       }
 
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method: 'DELETE',
         headers: {
           Authorization: `Bearer ${token}`,
@@ -457,7 +620,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setProcessingId(file.id);
     setActionError(null);
     try {
-      const res = await fetch(`/api/files/${file.id}/download`, {
+      const res = await apiFetch(`/api/files/${file.id}/download`, {
         headers: {
           Authorization: `Bearer ${token}`,
           'x-device-id': adminUser.deviceId,
@@ -522,6 +685,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
 
           <div className="flex items-center gap-3">
+            <button
+              id="admin-send-notification-btn"
+              onClick={() => {
+                setNotificationTargetUser(null);
+                setShowSendNotificationModal(true);
+              }}
+              className="py-1.5 px-3 rounded-lg bg-amber-500 hover:bg-amber-400 text-zinc-950 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer shadow-sm active:scale-95"
+              title="Broadcast or send notification to users"
+            >
+              <Bell className="w-3.5 h-3.5" />
+              <span>Send Notification</span>
+            </button>
+
             <button
               onClick={loadAdminData}
               title="Refresh database records"
@@ -951,7 +1127,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <th className="py-3 px-4 text-center">Delete Own</th>
                           <th className="py-3 px-4 text-center">Download</th>
                           <th className="py-3 px-4 text-center">Status</th>
-                          <th className="py-3 px-4 text-right">Delete</th>
+                          <th className="py-3 px-4 text-right">Actions</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-zinc-800/60">
@@ -1073,17 +1249,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                                 </button>
                               </td>
 
-                              {/* Delete Account */}
+                              {/* Actions: Direct Notify & Delete Account */}
                               <td className="py-3 px-4 text-right">
-                                {!isMaster && (
+                                <div className="flex items-center justify-end gap-1.5">
                                   <button
-                                    onClick={() => handleDeleteUser(user.id, user.email)}
-                                    title="Revoke user account"
-                                    className="p-1.5 rounded-lg bg-zinc-800 hover:bg-red-950 text-zinc-400 hover:text-red-300 transition cursor-pointer"
+                                    onClick={() => {
+                                      setNotificationTargetUser(user);
+                                      setShowSendNotificationModal(true);
+                                    }}
+                                    title={`Send notification to ${user.name}`}
+                                    className="p-1.5 rounded-lg bg-zinc-800 hover:bg-amber-500/20 text-zinc-400 hover:text-amber-400 border border-transparent hover:border-amber-500/30 transition cursor-pointer"
                                   >
-                                    <Trash2 className="w-3.5 h-3.5" />
+                                    <Bell className="w-3.5 h-3.5" />
                                   </button>
-                                )}
+                                  {!isMaster && (
+                                    <button
+                                      onClick={() => handleDeleteUser(user.id, user.email)}
+                                      title="Revoke user account"
+                                      className="p-1.5 rounded-lg bg-zinc-800 hover:bg-red-950 text-zinc-400 hover:text-red-300 transition cursor-pointer"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
+                                </div>
                               </td>
                             </tr>
                           );
@@ -1254,7 +1442,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   )}
 
                   {/* Tables Status Matrix */}
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 pt-2 border-t border-zinc-800/80">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 pt-2 border-t border-zinc-800/80">
                     <div className="p-2.5 rounded-lg bg-zinc-950/60 border border-zinc-800 flex items-center justify-between">
                       <span className="text-xs font-mono text-zinc-300">admin_credentials</span>
                       {supabaseStatus?.tables?.admin_credentials ? (
@@ -1319,6 +1507,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </span>
                       )}
                     </div>
+
+                    <div className="p-2.5 rounded-lg bg-zinc-950/60 border border-zinc-800 flex items-center justify-between">
+                      <span className="text-xs font-mono text-zinc-300">notifications</span>
+                      {supabaseStatus?.tables?.notifications ? (
+                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                          READY
+                        </span>
+                      ) : (
+                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                          PENDING
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   {!supabaseStatus?.allTablesReady && (
@@ -1329,6 +1530,170 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       </div>
                     </div>
                   )}
+                </div>
+
+                {/* Notifications Table Management Card */}
+                <div className="p-4 bg-zinc-900/90 border border-zinc-800 rounded-xl space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-zinc-800/80">
+                    <div className="flex items-start gap-3">
+                      <div className="p-2 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 mt-0.5">
+                        <Bell className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h3 className="text-sm font-semibold text-zinc-100 font-mono">
+                            public.notifications
+                          </h3>
+                          {supabaseStatus?.tables?.notifications ? (
+                            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3" />
+                              READY & PERSISTING
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/30 flex items-center gap-1">
+                              <AlertTriangle className="w-3 h-3" />
+                              SQL SETUP PENDING
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-zinc-400 mt-1">
+                          Persistent PostgreSQL table storing real-time broadcasts, system alerts, and direct user notifications in Supabase.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        onClick={handleCopyNotificationsSql}
+                        className="py-1.5 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium rounded-lg transition flex items-center gap-1.5 cursor-pointer"
+                        title="Copy SQL required to create notifications table and RLS policies in Supabase"
+                      >
+                        {copiedNotificationsSql ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                        <span>{copiedNotificationsSql ? 'Copied SQL!' : 'Copy Table SQL'}</span>
+                      </button>
+
+                      <a
+                        href="https://supabase.com/dashboard/project/mzkklxgptpifgmzstegs/sql/new"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="py-1.5 px-3 bg-indigo-600/30 hover:bg-indigo-600/40 text-indigo-300 border border-indigo-500/30 text-xs font-medium rounded-lg transition flex items-center gap-1.5"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        <span>Open Supabase SQL Editor</span>
+                      </a>
+                    </div>
+                  </div>
+
+                  {/* Action Bar for Notifications Table */}
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    <button
+                      onClick={handleSyncNotificationsToSupabase}
+                      disabled={syncingNotifications}
+                      className="py-1.5 px-3 bg-amber-500 hover:bg-amber-400 text-zinc-950 text-xs font-semibold rounded-lg transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${syncingNotifications ? 'animate-spin' : ''}`} />
+                      <span>{syncingNotifications ? 'Verifying & Syncing...' : 'Verify & Sync Notifications to Supabase'}</span>
+                    </button>
+
+                    <button
+                      onClick={handleTestSaveNotification}
+                      disabled={testingNotification}
+                      className="py-1.5 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium rounded-lg transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                    >
+                      <Send className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>{testingNotification ? 'Saving...' : 'Send Test Notification to Supabase'}</span>
+                    </button>
+
+                    <button
+                      onClick={() => setShowNotificationsSql(!showNotificationsSql)}
+                      className="py-1.5 px-3 bg-zinc-800/60 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 text-xs rounded-lg transition flex items-center gap-1.5 cursor-pointer ml-auto"
+                    >
+                      <Code className="w-3.5 h-3.5" />
+                      <span>{showNotificationsSql ? 'Hide SQL Script' : 'View SQL Script'}</span>
+                    </button>
+                  </div>
+
+                  {/* Feedback messages */}
+                  {notificationsSyncFeedback && (
+                    <div
+                      className={`p-3 rounded-lg text-xs flex items-start gap-2 ${
+                        notificationsSyncFeedback.success
+                          ? 'bg-emerald-950/40 border border-emerald-800/40 text-emerald-300'
+                          : 'bg-amber-950/40 border border-amber-800/40 text-amber-300'
+                      }`}
+                    >
+                      {notificationsSyncFeedback.success ? (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                      ) : (
+                        <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                      )}
+                      <span>{notificationsSyncFeedback.message}</span>
+                    </div>
+                  )}
+
+                  {testNotificationFeedback && (
+                    <div
+                      className={`p-3 rounded-lg text-xs flex items-start gap-2 ${
+                        testNotificationFeedback.success
+                          ? 'bg-emerald-950/40 border border-emerald-800/40 text-emerald-300'
+                          : 'bg-rose-950/40 border border-rose-800/40 text-rose-300'
+                      }`}
+                    >
+                      {testNotificationFeedback.success ? (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                      ) : (
+                        <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                      )}
+                      <span>{testNotificationFeedback.message}</span>
+                    </div>
+                  )}
+
+                  {/* Collapsible SQL Viewer */}
+                  {showNotificationsSql && (
+                    <div className="space-y-2 pt-2 border-t border-zinc-800/80">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-mono text-zinc-400">
+                          PostgreSQL Schema: public.notifications (Row Level Security Enabled)
+                        </span>
+                        <button
+                          onClick={handleCopyNotificationsSql}
+                          className="text-[11px] text-amber-400 hover:text-amber-300 flex items-center gap-1 font-mono cursor-pointer"
+                        >
+                          <Copy className="w-3 h-3" />
+                          <span>Copy</span>
+                        </button>
+                      </div>
+                      <pre className="p-3 bg-zinc-950 rounded-lg text-[11px] font-mono text-zinc-300 overflow-x-auto border border-zinc-800/80 max-h-60 leading-relaxed">
+                        {notificationsSqlScript}
+                      </pre>
+                    </div>
+                  )}
+                </div>
+
+                {/* Master Database SQL Viewer */}
+                <div className="p-4 bg-zinc-900/90 border border-zinc-800 rounded-xl space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="text-xs font-semibold text-zinc-200">
+                        Full Vault Database Schema (All 6 Tables + Policies)
+                      </h4>
+                      <p className="text-[11px] text-zinc-400 mt-0.5">
+                        Includes admin_credentials, existing_users, request_logins, device_change_requests, uploaded_files, and notifications.
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(supabaseSql);
+                        setCopiedSql(true);
+                        triggerNotice('Copied complete database SQL to clipboard');
+                        setTimeout(() => setCopiedSql(false), 2500);
+                      }}
+                      className="py-1.5 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium rounded-lg transition flex items-center gap-1.5 cursor-pointer"
+                    >
+                      {copiedSql ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedSql ? 'Copied Full Script!' : 'Copy Full SQL Script'}</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
@@ -1478,6 +1843,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
       )}
+
+      {/* Admin Send Notification Modal */}
+      <SendNotificationModal
+        isOpen={showSendNotificationModal}
+        onClose={() => {
+          setShowSendNotificationModal(false);
+          setNotificationTargetUser(null);
+        }}
+        token={token}
+        adminDeviceId={adminUser.deviceId}
+        existingUsers={existingUsers}
+        preselectedUser={notificationTargetUser}
+        onNotificationSent={(notif) => {
+          triggerNotice(`Notification "${notif.title}" sent successfully!`);
+          loadAdminData();
+        }}
+      />
     </div>
   );
 };
